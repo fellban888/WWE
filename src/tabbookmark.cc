@@ -157,8 +157,8 @@ bool SendLeftClickAt(POINT point) {
     input.mi.dwExtraInfo = GetMagicCode();
     return input;
   };
-  const std::array<INPUT, 2> inputs = {mouse_input(MOUSEEVENTF_LEFTDOWN),
-                                       mouse_input(MOUSEEVENTF_LEFTUP)};
+  std::array<INPUT, 2> inputs = {mouse_input(MOUSEEVENTF_LEFTDOWN),
+                                  mouse_input(MOUSEEVENTF_LEFTUP)};
   const bool sent =
       SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT)) ==
       inputs.size();
@@ -199,7 +199,7 @@ void CALLBACK BookmarkBatchTimerProc(HWND root, UINT, UINT_PTR event_id, DWORD) 
       batch.phase = BookmarkBatchPhase::kOpenNextUrl;
       ArmBookmarkBatchTimer(root, 25);
       return;
-    case BookmarkBatchPhase::kOpenNextUrl:
+    case BookmarkBatchPhase::kOpenNextUrl: {
       if (batch.next_url == batch.urls.size()) {
         batch.phase = BookmarkBatchPhase::kRestoreClipboard;
         ArmBookmarkBatchTimer(root, 75);
@@ -222,6 +222,7 @@ void CALLBACK BookmarkBatchTimerProc(HWND root, UINT, UINT_PTR event_id, DWORD) 
       ++batch.next_url;
       ArmBookmarkBatchTimer(root, 75);
       return;
+    }
     case BookmarkBatchPhase::kRestoreClipboard:
       OleSetClipboard(batch.clipboard_before.Get());
       bookmark_batch.reset();

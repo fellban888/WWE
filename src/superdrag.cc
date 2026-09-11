@@ -329,7 +329,7 @@ bool SendModifiedClickAt(POINT point, bool background) {
     input.mi.dwExtraInfo = GetMagicCode();
     return input;
   };
-  const std::array<INPUT, 6> inputs = {
+  std::array<INPUT, 6> inputs = {
       keyboard_input(VK_CONTROL, KEYEVENTF_EXTENDEDKEY),
       keyboard_input(VK_SHIFT, KEYEVENTF_EXTENDEDKEY),
       mouse_input(MOUSEEVENTF_LEFTDOWN),
