@@ -62,6 +62,9 @@ using DoDragDropFn = HRESULT(WINAPI*)(IDataObject*, IDropSource*, DWORD,
                                       DWORD*);
 DoDragDropFn original_do_drag_drop = nullptr;
 
+bool HasMovedFarEnough(POINT up_point);
+bool StartSuperDragOpen(HWND root, std::wstring url, bool background);
+
 std::wstring GetMappingName(DWORD browser_pid) {
   return L"Local\\ChromePlusSuperDrag-" + std::to_wstring(browser_pid);
 }
@@ -70,7 +73,29 @@ bool IsValidUrl(std::wstring_view url) {
   if (url.empty() || url.size() >= kMaxUrlChars) {
     return false;
   }
-  return !url.starts_with(L"javascript:");
+  return (url.starts_with(L"http://") || url.starts_with(L"https://") ||
+          url.starts_with(L"ftp://") || url.starts_with(L"file://") ||
+          url.starts_with(L"mailto:")) &&
+         !url.starts_with(L"javascript:");
+}
+
+std::optional<std::wstring> MultiByteToWide(std::string_view text,
+                                            UINT code_page) {
+  if (text.empty()) {
+    return std::nullopt;
+  }
+  const int length = MultiByteToWideChar(
+      code_page, 0, text.data(), static_cast<int>(text.size()), nullptr, 0);
+  if (length <= 0) {
+    return std::nullopt;
+  }
+  std::wstring wide(length, L'\0');
+  if (!MultiByteToWideChar(code_page, 0, text.data(),
+                           static_cast<int>(text.size()), wide.data(),
+                           length)) {
+    return std::nullopt;
+  }
+  return wide;
 }
 
 std::optional<std::string> GetHGlobalText(IDataObject* data_object,
@@ -198,6 +223,28 @@ bool ContainsAsciiIgnoreCase(std::string_view text, std::string_view needle) {
   return false;
 }
 
+size_t FindAsciiIgnoreCase(std::string_view text, std::string_view needle) {
+  if (needle.empty() || needle.size() > text.size()) {
+    return std::string_view::npos;
+  }
+  for (size_t i = 0; i <= text.size() - needle.size(); ++i) {
+    if (StartsWithAsciiIgnoreCase(text.substr(i), needle)) {
+      return i;
+    }
+  }
+  return std::string_view::npos;
+}
+
+std::string HtmlEntityDecode(std::string_view text) {
+  std::string decoded(text);
+  ReplaceStringInPlace(decoded, "&amp;", "&");
+  ReplaceStringInPlace(decoded, "&quot;", "\"");
+  ReplaceStringInPlace(decoded, "&#39;", "'");
+  ReplaceStringInPlace(decoded, "&lt;", "<");
+  ReplaceStringInPlace(decoded, "&gt;", ">");
+  return decoded;
+}
+
 // Chromium's CF_HTML fragment preserves a dragged anchor as its first element.
 // Reject image drags even when an image is wrapped by an anchor so native image
 // dragging is left entirely to Chrome.
@@ -238,6 +285,59 @@ bool IsAnchorOnlyHtmlFragment(std::string_view fragment) {
   return false;
 }
 
+std::optional<std::wstring> ExtractHrefFromAnchorFragment(
+    std::string_view fragment) {
+  const size_t anchor = FindAsciiIgnoreCase(fragment, "<a");
+  if (anchor == std::string_view::npos) {
+    return std::nullopt;
+  }
+  const size_t tag_end = fragment.find('>', anchor + 2);
+  if (tag_end == std::string_view::npos) {
+    return std::nullopt;
+  }
+  const std::string_view tag = fragment.substr(anchor, tag_end - anchor);
+  const size_t href = FindAsciiIgnoreCase(tag, "href");
+  if (href == std::string_view::npos) {
+    return std::nullopt;
+  }
+  const size_t equal = tag.find('=', href + 4);
+  if (equal == std::string_view::npos) {
+    return std::nullopt;
+  }
+  size_t value_start = equal + 1;
+  while (value_start < tag.size() &&
+         std::isspace(static_cast<unsigned char>(tag[value_start]))) {
+    ++value_start;
+  }
+  if (value_start >= tag.size()) {
+    return std::nullopt;
+  }
+
+  const char quote = tag[value_start];
+  size_t value_end = std::string_view::npos;
+  if (quote == '\'' || quote == '"') {
+    ++value_start;
+    value_end = tag.find(quote, value_start);
+  } else {
+    value_end = value_start;
+    while (value_end < tag.size() &&
+           !std::isspace(static_cast<unsigned char>(tag[value_end]))) {
+      ++value_end;
+    }
+  }
+  if (value_end == std::string_view::npos || value_end <= value_start) {
+    return std::nullopt;
+  }
+
+  const std::string decoded =
+      HtmlEntityDecode(tag.substr(value_start, value_end - value_start));
+  auto wide = MultiByteToWide(decoded, CP_UTF8);
+  if (!wide || !IsValidUrl(*wide)) {
+    wide = MultiByteToWide(decoded, CP_ACP);
+  }
+  return wide && IsValidUrl(*wide) ? wide : std::nullopt;
+}
+
 std::optional<std::wstring> GetDraggedAnchorUrl(IDataObject* data_object) {
   const CLIPFORMAT html_format = RegisterClipboardFormatW(L"HTML Format");
   const auto html = GetHGlobalText(data_object, html_format);
@@ -251,7 +351,24 @@ std::optional<std::wstring> GetDraggedAnchorUrl(IDataObject* data_object) {
 
   const CLIPFORMAT url_format = RegisterClipboardFormatW(CFSTR_INETURLW);
   const auto url = GetHGlobalWideText(data_object, url_format);
-  return url && IsValidUrl(*url) ? url : std::nullopt;
+  if (url && IsValidUrl(*url)) {
+    return url;
+  }
+
+  const CLIPFORMAT ansi_url_format = RegisterClipboardFormatW(CFSTR_INETURLA);
+  if (const auto ansi_url = GetHGlobalText(data_object, ansi_url_format)) {
+    if (auto wide = MultiByteToWide(*ansi_url, CP_ACP);
+        wide && IsValidUrl(*wide)) {
+      return wide;
+    }
+  }
+
+  if (const auto unicode_text = GetHGlobalWideText(data_object, CF_UNICODETEXT);
+      unicode_text && IsValidUrl(*unicode_text)) {
+    return unicode_text;
+  }
+
+  return ExtractHrefFromAnchorFragment(*fragment);
 }
 
 void PublishDraggedUrl(std::wstring_view url) {
@@ -290,12 +407,31 @@ HRESULT WINAPI DetouredDoDragDrop(IDataObject* data_object,
                                   IDropSource* drop_source,
                                   DWORD ok_effects,
                                   DWORD* effect) {
+  std::optional<std::wstring> url;
   if (config.IsSuperDragOpenLink()) {
-    if (const auto url = GetDraggedAnchorUrl(data_object)) {
+    url = GetDraggedAnchorUrl(data_object);
+    if (url && !drag_record) {
       PublishDraggedUrl(*url);
     }
   }
-  return original_do_drag_drop(data_object, drop_source, ok_effects, effect);
+  const HRESULT hr =
+      original_do_drag_drop(data_object, drop_source, ok_effects, effect);
+
+  // On current Chrome for Windows, webpage OLE drag is normally driven by the
+  // browser process. DoDragDrop consumes the mouse-up that ends the drag, so a
+  // WH_MOUSE handler cannot be the only trigger. Open right after DoDragDrop
+  // returns when this hook is running in the browser process.
+  if (url && drag_record) {
+    POINT point;
+    if (GetCursorPos(&point) && HasMovedFarEnough(point)) {
+      HWND root = GetForegroundWindow();
+      root = root ? GetAncestor(root, GA_ROOT) : nullptr;
+      if (root && IsChromeWindow(root)) {
+        StartSuperDragOpen(root, *url, config.IsSuperDragBackground());
+      }
+    }
+  }
+  return hr;
 }
 
 void ClearRecord() {
@@ -469,6 +605,7 @@ void InitializeSuperDragBrowser() {
   }
   ZeroMemory(drag_record, sizeof(*drag_record));
   RegisterMouseHandler(SuperDragMouseHandler, HandlerPriority::kHigh);
+  InitializeSuperDragRenderer();
 }
 
 void InitializeSuperDragRenderer() {
