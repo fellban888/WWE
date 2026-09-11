@@ -1,0 +1,126 @@
+name: Build
+
+on:
+  push:
+    paths-ignore:
+      - ".clang-format"
+      - ".gitignore"
+      - "*.md"
+      - "LICENSE"
+      - "setdll/**"
+      - "src/version.h"
+      - ".github/ISSUE_TEMPLATE/**"
+      - ".github/workflows/delete_old_workflow_runs.yml"
+      - ".github/workflows/genReleaseNote.sh"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (SemVer)'
+        required: false
+      build_mode:
+        description: 'Build mode'
+        required: false
+        default: 'release'
+        type: choice
+        options:
+          - release
+          - debug
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - name: build_x86
+            arch: x86
+          - name: build_x64
+            arch: x64
+          - name: build_arm64
+            arch: arm64
+
+    name: ${{ matrix.name }}
+    runs-on: windows-2025
+
+    steps:
+      - name: Checkout Repo
+        uses: actions/checkout@v7
+        with:
+          submodules: 'true'
+
+      - name: Set Version
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          if [ -n "$INPUT_VERSION" ]; then
+            VERSION="$INPUT_VERSION"
+          else
+            VERSION="alpha-${GITHUB_SHA:0:7}"
+          fi
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Set Build Mode
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ github.event.inputs.build_mode }}" ]; then
+            BUILD_MODE="${{ github.event.inputs.build_mode }}"
+          else
+            BUILD_MODE="release"
+          fi
+          echo "BUILD_MODE=$BUILD_MODE" >> $GITHUB_ENV
+          echo "Using BUILD_MODE=$BUILD_MODE"
+
+      - name: Build Chrome++
+        env:
+          BUILD_ARCH: ${{ matrix.arch }}
+        run: .\build.cmd $env:BUILD_ARCH $env:BUILD_MODE "version=$env:VERSION"
+
+      - name: Upload Build Artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: version-${{ matrix.arch }}${{ env.BUILD_MODE == 'debug' && '-debug' || '' }}-${{ env.VERSION }}
+          path: out/${{ matrix.arch }}/${{ env.BUILD_MODE }}/*
+
+  create_pr:
+    needs: build
+    runs-on: ubuntu-slim
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.version != ''
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Git Configurations
+        run: |
+          git config user.name "Bush2021"
+          git config user.email "79072750+Bush2021@users.noreply.github.com"
+          git checkout -b release
+
+      - name: Update version.h
+        run: |
+          VERSION="${{ github.event.inputs.version }}"
+          if ! [[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[a-zA-Z0-9.]+)?$ ]]; then
+            echo "Invalid version '$VERSION'. Expected SemVer like 1.2.3 or 1.2.3-alpha.1" >&2
+            exit 1
+          fi
+          echo "VERSION=$VERSION" >> $GITHUB_ENV
+          CORE="${VERSION%%-*}"
+          PRE="${VERSION#*-}"
+          if [ "$PRE" = "$VERSION" ]; then PRE_SUFFIX=""; else PRE_SUFFIX="-$PRE"; fi
+          IFS='.' read -r MAJOR MINOR PATCH <<< "$CORE"
+          sed -i 's/#define RELEASE_VER_MAIN .*/#define RELEASE_VER_MAIN '"$MAJOR"'/' src/version.h
+          sed -i 's/#define RELEASE_VER_SUB .*/#define RELEASE_VER_SUB '"$MINOR"'/' src/version.h
+          sed -i 's/#define RELEASE_VER_FIX .*/#define RELEASE_VER_FIX '"$PATCH"'/' src/version.h
+          sed -i 's|#define RELEASE_VER_PRE_SUFFIX .*|#define RELEASE_VER_PRE_SUFFIX "'"$PRE_SUFFIX"'"|' src/version.h
+          git add src/version.h
+          git commit -m "build(release): bump version to $VERSION" -m "Build-Run-Id: ${{ github.run_id }}"
+          git push origin release --force
+
+      - name: Create Pull Request
+        env:
+          GITHUB_TOKEN: ${{ secrets.TOKEN }}
+        run: |
+          gh pr create --base main --head release --title "build(release): bump version to ${{ github.event.inputs.version }}" --body "Bump version to ${{ github.event.inputs.version }}"
+
+      - name: Output Run ID
+        run: echo "RUN_ID=${{ github.run_id }}" >> $GITHUB_OUTPUT
