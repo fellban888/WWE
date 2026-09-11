@@ -26,6 +26,9 @@ on:
           - release
           - debug
 
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -83,6 +86,17 @@ jobs:
         with:
           name: build-log-${{ matrix.arch }}-${{ env.VERSION }}
           path: build.log
+
+      - name: Publish Failed Build Log
+        if: failure()
+        shell: pwsh
+        run: |
+          Copy-Item build.log build-log.txt -Force
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add build-log.txt
+          git commit -m "publish failed build log [skip ci]" || exit 0
+          git push
 
       - name: Upload Build Artifacts
         uses: actions/upload-artifact@v7
