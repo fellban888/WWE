@@ -239,13 +239,12 @@ void StartBookmarkFolderBatch(HWND root, POINT point, bool from_context_menu) {
   if (!config.IsBookmarkBatchOpenEnabled() || !root || !IsWindow(root)) {
     return;
   }
-  bookmark_batch = BookmarkBatchState{
-      .root = root,
-      .folder_point = point,
-      .phase = from_context_menu
-                   ? BookmarkBatchPhase::kClickFolderAfterContext
-                   : BookmarkBatchPhase::kWaitForMenu,
-  };
+  BookmarkBatchState state;
+  state.root = root;
+  state.folder_point = point;
+  state.phase = from_context_menu ? BookmarkBatchPhase::kClickFolderAfterContext
+                                  : BookmarkBatchPhase::kWaitForMenu;
+  bookmark_batch = std::move(state);
   ArmBookmarkBatchTimer(root, from_context_menu ? 1 : 75);
 }
 

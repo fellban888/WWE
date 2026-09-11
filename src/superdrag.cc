@@ -9,6 +9,7 @@
 #include <array>
 #include <cctype>
 #include <cstdint>
+#include <cstdlib>
 #include <optional>
 #include <ranges>
 #include <string>
@@ -412,7 +413,7 @@ void InitializeSuperDragRenderer() {
   DetourTransactionBegin();
   DetourUpdateThread(GetCurrentThread());
   DetourAttach(reinterpret_cast<PVOID*>(&original_do_drag_drop),
-               DetouredDoDragDrop);
+               reinterpret_cast<PVOID>(DetouredDoDragDrop));
   const LONG status = DetourTransactionCommit();
   if (status != NO_ERROR) {
     DebugLog(L"super drag: DetourAttach(DoDragDrop) failed: {}", status);
