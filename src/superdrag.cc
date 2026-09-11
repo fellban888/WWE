@@ -79,6 +79,32 @@ bool IsValidUrl(std::wstring_view url) {
          !url.starts_with(L"javascript:");
 }
 
+bool HasFormat(IDataObject* data_object, CLIPFORMAT format, DWORD tymed) {
+  if (!data_object) {
+    return false;
+  }
+  FORMATETC format_etc = {format, nullptr, DVASPECT_CONTENT, -1, tymed};
+  return data_object->QueryGetData(&format_etc) == S_OK;
+}
+
+bool HasRegisteredFormat(IDataObject* data_object,
+                         const wchar_t* name,
+                         DWORD tymed = TYMED_HGLOBAL) {
+  const CLIPFORMAT format = RegisterClipboardFormatW(name);
+  return format != 0 && HasFormat(data_object, format, tymed);
+}
+
+bool IsImageOrFileDrag(IDataObject* data_object) {
+  return HasFormat(data_object, CF_BITMAP, TYMED_GDI) ||
+         HasFormat(data_object, CF_DIB, TYMED_HGLOBAL) ||
+         HasFormat(data_object, CF_DIBV5, TYMED_HGLOBAL) ||
+         HasFormat(data_object, CF_HDROP, TYMED_HGLOBAL) ||
+         HasRegisteredFormat(data_object, L"PNG") ||
+         HasRegisteredFormat(data_object, L"image/png") ||
+         HasRegisteredFormat(data_object, CFSTR_FILEDESCRIPTORW) ||
+         HasRegisteredFormat(data_object, CFSTR_FILEDESCRIPTORA);
+}
+
 std::optional<std::wstring> MultiByteToWide(std::string_view text,
                                             UINT code_page) {
   if (text.empty()) {
@@ -339,19 +365,15 @@ std::optional<std::wstring> ExtractHrefFromAnchorFragment(
 }
 
 std::optional<std::wstring> GetDraggedAnchorUrl(IDataObject* data_object) {
-  const CLIPFORMAT html_format = RegisterClipboardFormatW(L"HTML Format");
-  const auto html = GetHGlobalText(data_object, html_format);
-  if (!html) {
-    return std::nullopt;
-  }
-  const auto fragment = GetHtmlFragment(*html);
-  if (!fragment || !IsAnchorOnlyHtmlFragment(*fragment)) {
+  if (IsImageOrFileDrag(data_object)) {
+    DebugLog(L"super drag: ignore image/file drag");
     return std::nullopt;
   }
 
   const CLIPFORMAT url_format = RegisterClipboardFormatW(CFSTR_INETURLW);
   const auto url = GetHGlobalWideText(data_object, url_format);
   if (url && IsValidUrl(*url)) {
+    DebugLog(L"super drag: got URL from UniformResourceLocatorW");
     return url;
   }
 
@@ -359,16 +381,39 @@ std::optional<std::wstring> GetDraggedAnchorUrl(IDataObject* data_object) {
   if (const auto ansi_url = GetHGlobalText(data_object, ansi_url_format)) {
     if (auto wide = MultiByteToWide(*ansi_url, CP_ACP);
         wide && IsValidUrl(*wide)) {
+      DebugLog(L"super drag: got URL from UniformResourceLocatorA");
       return wide;
     }
   }
 
+  const CLIPFORMAT html_format = RegisterClipboardFormatW(L"HTML Format");
+  const auto html = GetHGlobalText(data_object, html_format);
+  if (!html) {
+    return std::nullopt;
+  }
+  const auto fragment = GetHtmlFragment(*html);
+  if (!fragment) {
+    return std::nullopt;
+  }
+
+  if (ContainsAsciiIgnoreCase(*fragment, "<img")) {
+    DebugLog(L"super drag: ignore HTML image drag");
+    return std::nullopt;
+  }
+
   if (const auto unicode_text = GetHGlobalWideText(data_object, CF_UNICODETEXT);
       unicode_text && IsValidUrl(*unicode_text)) {
+    DebugLog(L"super drag: got URL from CF_UNICODETEXT");
     return unicode_text;
   }
 
-  return ExtractHrefFromAnchorFragment(*fragment);
+  auto href = ExtractHrefFromAnchorFragment(*fragment);
+  if (href) {
+    DebugLog(L"super drag: got URL from HTML href");
+  } else if (!IsAnchorOnlyHtmlFragment(*fragment)) {
+    DebugLog(L"super drag: HTML fragment is not an anchor");
+  }
+  return href;
 }
 
 void PublishDraggedUrl(std::wstring_view url) {

@@ -62,7 +62,7 @@ void Config::LoadConfig() {
 
   // mouse
   super_drag_open_link_ =
-      ::GetPrivateProfileIntW(L"mouse", L"super_drag_open_link", 0,
+      ::GetPrivateProfileIntW(L"mouse", L"super_drag_open_link", 1,
                               GetIniPath().c_str()) != 0;
   super_drag_background_ =
       ::GetPrivateProfileIntW(L"mouse", L"super_drag_background", 1,
