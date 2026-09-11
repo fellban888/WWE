@@ -3,17 +3,20 @@
 #include <windows.h>
 
 #include <objidl.h>
+#include <ole2.h>
 #include <shlobj.h>
+#include <wrl/client.h>
 
 #include <algorithm>
-#include <array>
 #include <cctype>
 #include <cstdint>
 #include <cstdlib>
+#include <cstring>
 #include <optional>
 #include <ranges>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "config.h"
 #include "detours.h"
@@ -22,9 +25,17 @@
 
 namespace {
 
+using Microsoft::WRL::ComPtr;
+
 constexpr uint32_t kSharedMagic = 0x53444731;  // "SDG1"
 constexpr size_t kMaxUrlChars = 4096;
 constexpr ULONGLONG kRecordTimeoutMs = 5000;
+constexpr UINT_PTR kSuperDragOpenTimerId = 0x73644F70;  // 'sdOp'
+
+enum class SuperDragOpenPhase {
+  kOpen,
+  kRestoreClipboard,
+};
 
 struct SharedDragRecord {
   volatile LONG ready;
@@ -36,6 +47,16 @@ struct SharedDragRecord {
 HANDLE drag_mapping = nullptr;
 SharedDragRecord* drag_record = nullptr;
 POINT lbutton_down_point = {-1, -1};
+
+struct PendingSuperDragOpen {
+  HWND root = nullptr;
+  std::wstring url;
+  bool background = true;
+  SuperDragOpenPhase phase = SuperDragOpenPhase::kOpen;
+  ComPtr<IDataObject> clipboard_before;
+};
+
+std::optional<PendingSuperDragOpen> pending_open;
 
 using DoDragDropFn = HRESULT(WINAPI*)(IDataObject*, IDropSource*, DWORD,
                                       DWORD*);
@@ -308,46 +329,94 @@ bool HasMovedFarEnough(POINT up_point) {
   return dx > distance || dy > distance;
 }
 
-bool SendModifiedClickAt(POINT point, bool background) {
-  POINT cursor;
-  if (!GetCursorPos(&cursor) || !SetCursorPos(point.x, point.y)) {
+bool SetClipboardText(std::wstring_view text) {
+  if (!OpenClipboard(nullptr)) {
+    return false;
+  }
+  const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
+  HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+  if (!memory) {
+    CloseClipboard();
+    return false;
+  }
+  void* locked = GlobalLock(memory);
+  if (!locked) {
+    GlobalFree(memory);
+    CloseClipboard();
+    return false;
+  }
+  std::memcpy(locked, text.data(), text.size() * sizeof(wchar_t));
+  static_cast<wchar_t*>(locked)[text.size()] = L'\0';
+  GlobalUnlock(memory);
+  EmptyClipboard();
+  if (!SetClipboardData(CF_UNICODETEXT, memory)) {
+    GlobalFree(memory);
+    CloseClipboard();
+    return false;
+  }
+  CloseClipboard();
+  return true;
+}
+
+void ArmSuperDragOpenTimer(HWND root, UINT delay);
+
+void CALLBACK SuperDragOpenTimerProc(HWND root, UINT, UINT_PTR event_id, DWORD) {
+  KillTimer(root, event_id);
+  if (!pending_open || pending_open->root != root || !IsWindow(root)) {
+    pending_open.reset();
+    return;
+  }
+
+  auto& open = *pending_open;
+  switch (open.phase) {
+    case SuperDragOpenPhase::kOpen:
+      if (!SetClipboardText(open.url)) {
+        DebugLog(L"super drag: SetClipboardText failed");
+        pending_open.reset();
+        return;
+      }
+      SetForegroundWindow(root);
+      SendKey(VK_CONTROL, 'L');
+      SendKey(VK_CONTROL, 'V');
+      if (open.background) {
+        SendKey(VK_SHIFT, VK_MENU, VK_RETURN);
+      } else {
+        SendKey(VK_MENU, VK_RETURN);
+      }
+      open.phase = SuperDragOpenPhase::kRestoreClipboard;
+      ArmSuperDragOpenTimer(root, 250);
+      return;
+    case SuperDragOpenPhase::kRestoreClipboard:
+      if (open.clipboard_before) {
+        OleSetClipboard(open.clipboard_before.Get());
+      }
+      pending_open.reset();
+      return;
+  }
+}
+
+void ArmSuperDragOpenTimer(HWND root, UINT delay) {
+  if (!SetTimer(root, kSuperDragOpenTimerId, delay, SuperDragOpenTimerProc)) {
+    DebugLog(L"super drag: SetTimer failed: {}", GetLastError());
+    pending_open.reset();
+  }
+}
+
+bool StartSuperDragOpen(HWND root, std::wstring url, bool background) {
+  if (!root || !IsWindow(root) || !IsValidUrl(url)) {
     return false;
   }
 
-  const auto keyboard_input = [](WORD key, DWORD flags) {
-    INPUT input = {};
-    input.type = INPUT_KEYBOARD;
-    input.ki.wVk = key;
-    input.ki.dwFlags = flags;
-    input.ki.dwExtraInfo = GetMagicCode();
-    return input;
-  };
-  const auto mouse_input = [](DWORD flags) {
-    INPUT input = {};
-    input.type = INPUT_MOUSE;
-    input.mi.dwFlags = flags;
-    input.mi.dwExtraInfo = GetMagicCode();
-    return input;
-  };
-  std::array<INPUT, 6> inputs = {
-      keyboard_input(VK_CONTROL, KEYEVENTF_EXTENDEDKEY),
-      keyboard_input(VK_SHIFT, KEYEVENTF_EXTENDEDKEY),
-      mouse_input(MOUSEEVENTF_LEFTDOWN),
-      mouse_input(MOUSEEVENTF_LEFTUP),
-      keyboard_input(VK_SHIFT, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP),
-      keyboard_input(VK_CONTROL, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP),
-  };
-  // Ctrl-click is Chromium's native background-tab disposition; adding Shift
-  // makes Chromium activate the new tab. Keep the event in Chrome's own link
-  // activation path rather than depending on private browser ABI addresses.
-  const UINT count = background ? 4 : static_cast<UINT>(inputs.size());
-  std::array<INPUT, 4> background_inputs = {inputs[0], inputs[2], inputs[3],
-                                             inputs[5]};
-  const UINT sent = background
-                        ? SendInput(count, background_inputs.data(), sizeof(INPUT))
-                        : SendInput(count, inputs.data(), sizeof(INPUT));
-  SetCursorPos(cursor.x, cursor.y);
-  return sent == count;
+  PendingSuperDragOpen open;
+  open.root = root;
+  open.url = std::move(url);
+  open.background = background;
+  if (FAILED(OleGetClipboard(open.clipboard_before.ReleaseAndGetAddressOf()))) {
+    DebugLog(L"super drag: OleGetClipboard failed");
+  }
+  pending_open = std::move(open);
+  ArmSuperDragOpenTimer(root, 1);
+  return pending_open.has_value();
 }
 
 bool SuperDragMouseHandler(WPARAM w_param, LPARAM l_param) {
@@ -367,7 +436,12 @@ bool SuperDragMouseHandler(WPARAM w_param, LPARAM l_param) {
   if (!url) {
     return false;
   }
-  return SendModifiedClickAt(lbutton_down_point, config.IsSuperDragBackground());
+  HWND root = mouse->hwnd ? GetAncestor(mouse->hwnd, GA_ROOT) : nullptr;
+  if (!root || !IsChromeWindow(root)) {
+    root = GetForegroundWindow();
+    root = root ? GetAncestor(root, GA_ROOT) : nullptr;
+  }
+  return StartSuperDragOpen(root, *url, config.IsSuperDragBackground());
 }
 
 }  // namespace
@@ -376,6 +450,7 @@ void InitializeSuperDragBrowser() {
   if (!config.IsSuperDragOpenLink()) {
     return;
   }
+  OleInitialize(nullptr);
   drag_mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
                                     0, sizeof(SharedDragRecord),
                                     GetMappingName(GetCurrentProcessId()).c_str());

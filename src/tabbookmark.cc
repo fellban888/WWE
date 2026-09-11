@@ -9,6 +9,7 @@
 #include <cstring>
 #include <optional>
 #include <string>
+#include <utility>
 #include <vector>
 
 #include "config.h"
@@ -804,6 +805,7 @@ bool TabBookmarkKeyboardHandler(WPARAM wParam, LPARAM lParam) {
 }  // namespace
 
 void TabBookmark() {
+  OleInitialize(nullptr);
   RegisterMouseHandler(TabBookmarkMouseHandler, HandlerPriority::kNormal);
   RegisterKeyboardHandler(TabBookmarkKeyboardHandler, HandlerPriority::kNormal);
 }
