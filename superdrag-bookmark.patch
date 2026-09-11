@@ -1,0 +1,1107 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index f7f4c04..95c512b 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -151,6 +151,7 @@ add_library(chrome_plus SHARED
+   src/pakpatch.cc
+   src/policies.cc
+   src/portable.cc
++  src/superdrag.cc
+   src/tabbookmark.cc
+   src/uia.cc
+   src/upgradenotification.cc
+@@ -187,6 +188,7 @@ endif()
+ 
+ target_link_libraries(chrome_plus PRIVATE
+   onecore
++  ole32
+   propsys
+   oleacc
+   detours
+diff --git a/README.md b/README.md
+index 160b9bf..83003d8 100644
+--- a/README.md
++++ b/README.md
+@@ -34,6 +34,8 @@ Chrome++ Next is a `version.dll` injection project for Google Chrome. It is load
+ - Switch tabs with the mouse wheel while holding the right mouse button.
+ - Activate a tab by resting the cursor on it.
+ - Open omnibox input or bookmarks in a new tab.
++- Optional super drag for webpage anchors only; text and image drags retain Chrome's native behavior.
++- Opening a bookmark folder, or using the English/Chinese "Open all" menu command, opens the first URL in front and the remaining URLs in background tabs.
+ - Control new-tab detection through `new_tab_disable` and `new_tab_disable_name`.
+ 
+ ### Hotkeys and input remapping
+diff --git a/README.zh-CN.md b/README.zh-CN.md
+index 50994c4..f3ddebd 100644
+--- a/README.zh-CN.md
++++ b/README.zh-CN.md
+@@ -34,6 +34,8 @@ Chrome++ Next 是一个 `version.dll` 注入项目，会与 `chrome.exe` 一同
+ - 按住右键时滚轮切换标签页。
+ - 鼠标在标签页上停留后自动激活该标签页。
+ - 将地址栏输入内容或书签在新标签页中打开。
++- 可选的网页链接超级拖拽：仅锚点链接生效，文本和图片拖拽保持 Chrome 原生行为。
++- 点击收藏夹文件夹或在中文/英文“打开全部”菜单中批量打开时，首个标签页前台打开，其余标签页后台打开。
+ - 通过 `new_tab_disable` 和 `new_tab_disable_name` 控制新标签页判定。
+ 
+ ### 快捷键与按键映射
+diff --git a/src/chrome++.cc b/src/chrome++.cc
+index 08cffc1..22037c7 100644
+--- a/src/chrome++.cc
++++ b/src/chrome++.cc
+@@ -15,6 +15,7 @@
+ #include "pakpatch.h"
+ #include "policies.h"
+ #include "portable.h"
++#include "superdrag.h"
+ #include "tabbookmark.h"
+ #include "upgradenotification.h"
+ #include "utils.h"
+@@ -40,6 +41,10 @@ void ChromePlus() {
+   // Enhancement of the address bar, tab, and bookmark.
+   TabBookmark();
+ 
++  // Link drag handling needs the browser-process input hook as well as the
++  // renderer-process OLE drag source hook installed below in Loader().
++  InitializeSuperDragBrowser();
++
+   // Install input hooks (must be called after all handlers are registered).
+   InstallInputHooks();
+ 
+@@ -81,6 +86,7 @@ int Loader() {
+     // renderer CHECK that config (content/renderer/render_frame_impl.cc) and
+     // crash (#263). Other sub-process types never serve WebUI, so skip them.
+     PakPatch();
++    InitializeSuperDragRenderer();
+   }
+ 
+   // Return to the main function.
+diff --git a/src/chrome++.ini b/src/chrome++.ini
+index b9b26ccd1ea74b455cb97ff470e16be08311a118..302b71ac0d813bf871a4032be5ef66ae22a947ad 100644
+GIT binary patch
+delta 1855
+zcma)6Ur1A76h9XEuW49_q(v7YSW9gdh$2FvJp{V7xiKVj?7HhFZgcF9e-OP;i3N$p
+z4HD`#2zn8Eil8T<r`nqo)LTT4_2Ns^`kn9F-Sy9Aa=F|0-S3?5{Lb&3-}$uoakXOO
+zd3Qyv(b;v*c-LL6*AhRyq)?i&lq8K(6r?bILlnVkT6{}j6{AT?&=f4&@hCJ<uu)*C
+z&@4Pv*s_;~y=6UtZz;-9RNSqIRR}kUh<b^TVFXIUjE%;{WxNW*A%$HGZwTicBm;O#
+z5uyUW4E79Df=a+@R@j9Au2h;;g*=U%qp`-!tkdvZY&vgp!1-`+D<c^|WMq7BG#z91
+zoW`|Fr;NEKoBscxCb#<&mCO!_6ecN-io|iZiG){ssgYRHAd1P+D51k439~tDV&F+3
+zJ9VO9m&u9eLP-`(K;?_=(X;D+pS&2~QeS$PSKqIdYnL$f??qVeTS6mkYqq>Su%T5&
+zmlm??!zu+!m19RW^kOxTLcQ<jF#Bw&e^iFil6T^3l~)~idd)izxUU3nl4**Z80D0{
+zuD+eO<=vzHvD{5%u{saJ#tMwp<ZI~`$}o*$aM#@igNKz$9~duV%?+pbp)zI8_d#Y`
+zzRi@YRjUb9I|WP`h;#xtxe+4xWyDf9GTDHTAZw%GJ0SWjf)63IN(}#g^3tGa8cRef
+z%%`FIxX>}{pM%5zkY`03`o8gsR5zcPP*|Ln=q#`dPC#V>dd(WU3sXi;2bMP5aYV+!
+zFQeRrj+HlMMoEJfR$)JIO+pJ(MIW9`2WOxZ3d>TFdC1|C!gn4vY3jg<&uFM?G!oU7
+z#%9M!y_GD)lDk&e#9^I)mjVRS*fD-t0M>+LIgJxJqB5{fi2;{HTsdPT>-{JcuQ)by
+zVcv3G@PG_;97J*8ryBq#Q@1F#ig0j0%&WP_EUGRox7;(bqHVi+Mp&k83*>URJo?pu
+zJuu{z!rL9=cu>@*SjVDPXFMZr>1ZleI=)H%_UsJP?AG1(?B}&-uFVIhy)F56*NXPg
+z_v_AzHkehP-kUk2FtDiS$D^~#m%IMqMc+49(ADgIb^p8SP>(oSk~^w82sl$hnTKaV
+XYR|IY)tE<d`ucr$L#3?_^qTKKXo!#i
+
+delta 23
+fcmX@t%Xp)9!yJprO%`I4H&}=;@^0SfAjk#)eh~=q
+
+diff --git a/src/config.cc b/src/config.cc
+index 5d9594e..161b605 100644
+--- a/src/config.cc
++++ b/src/config.cc
+@@ -60,6 +60,23 @@ void Config::LoadConfig() {
+   disable_tab_name_ = GetIniString(L"tabs", L"new_tab_disable_name", L"");
+   disable_tab_names_ = StringSplit(disable_tab_name_, L',', L"\"");
+ 
++  // mouse
++  super_drag_open_link_ =
++      ::GetPrivateProfileIntW(L"mouse", L"super_drag_open_link", 0,
++                              GetIniPath().c_str()) != 0;
++  super_drag_background_ =
++      ::GetPrivateProfileIntW(L"mouse", L"super_drag_background", 1,
++                              GetIniPath().c_str()) != 0;
++  super_drag_distance_ = LoadSuperDragDistance();
++
++  // bookmark
++  bookmark_open_first_foreground_ =
++      ::GetPrivateProfileIntW(L"bookmark", L"open_first_foreground", 1,
++                              GetIniPath().c_str()) != 0;
++  bookmark_open_rest_background_ =
++      ::GetPrivateProfileIntW(L"bookmark", L"open_rest_background", 1,
++                              GetIniPath().c_str()) != 0;
++
+   // keymapping
+   LoadKeyMappings();
+ }
+@@ -139,4 +156,14 @@ int Config::LoadBookmarkNewTabMode() {
+                                  GetIniPath().c_str());
+ }
+ 
++int Config::LoadSuperDragDistance() {
++  constexpr int kDefaultDistance = 10;
++  constexpr int kMaxDistance = 200;
++  const int distance = ::GetPrivateProfileIntW(
++      L"mouse", L"super_drag_distance", kDefaultDistance,
++      GetIniPath().c_str());
++  return distance > 0 && distance <= kMaxDistance ? distance
++                                                    : kDefaultDistance;
++}
++
+ const Config& config = Config::Instance();
+diff --git a/src/config.h b/src/config.h
+index dbfbda0..9d3fc92 100644
+--- a/src/config.h
++++ b/src/config.h
+@@ -47,6 +47,22 @@ class Config {
+     return disable_tab_names_;
+   }
+ 
++  // mouse
++  bool IsSuperDragOpenLink() const { return super_drag_open_link_; }
++  bool IsSuperDragBackground() const { return super_drag_background_; }
++  int GetSuperDragDistance() const { return super_drag_distance_; }
++
++  // bookmark
++  bool IsBookmarkOpenFirstForeground() const {
++    return bookmark_open_first_foreground_;
++  }
++  bool IsBookmarkOpenRestBackground() const {
++    return bookmark_open_rest_background_;
++  }
++  bool IsBookmarkBatchOpenEnabled() const {
++    return bookmark_open_first_foreground_ || bookmark_open_rest_background_;
++  }
++
+   // keymapping
+   using KeyMappingPair = std::pair<std::wstring, std::wstring>;
+   const auto& GetKeyMappings() const { return key_mappings_; }
+@@ -64,6 +80,7 @@ class Config {
+   int LoadHoverTabDelay();
+   int LoadOpenUrlNewTabMode();
+   int LoadBookmarkNewTabMode();
++  int LoadSuperDragDistance();
+ 
+  private:
+   // general
+@@ -93,6 +110,15 @@ class Config {
+   std::wstring disable_tab_name_;
+   std::vector<std::wstring> disable_tab_names_;
+ 
++  // mouse
++  bool super_drag_open_link_;
++  bool super_drag_background_;
++  int super_drag_distance_;
++
++  // bookmark
++  bool bookmark_open_first_foreground_;
++  bool bookmark_open_rest_background_;
++
+   // keymapping
+   std::vector<KeyMappingPair> key_mappings_;
+ };
+diff --git a/src/superdrag.cc b/src/superdrag.cc
+new file mode 100644
+index 0000000..c322618
+--- /dev/null
++++ b/src/superdrag.cc
+@@ -0,0 +1,421 @@
++#include "superdrag.h"
++
++#include <windows.h>
++
++#include <objidl.h>
++#include <shlobj.h>
++
++#include <algorithm>
++#include <array>
++#include <cctype>
++#include <cstdint>
++#include <optional>
++#include <ranges>
++#include <string>
++#include <string_view>
++
++#include "config.h"
++#include "detours.h"
++#include "inputhook.h"
++#include "utils.h"
++
++namespace {
++
++constexpr uint32_t kSharedMagic = 0x53444731;  // "SDG1"
++constexpr size_t kMaxUrlChars = 4096;
++constexpr ULONGLONG kRecordTimeoutMs = 5000;
++
++struct SharedDragRecord {
++  volatile LONG ready;
++  uint32_t magic;
++  uint64_t captured_ticks;
++  wchar_t url[kMaxUrlChars];
++};
++
++HANDLE drag_mapping = nullptr;
++SharedDragRecord* drag_record = nullptr;
++POINT lbutton_down_point = {-1, -1};
++
++using DoDragDropFn = HRESULT(WINAPI*)(IDataObject*, IDropSource*, DWORD,
++                                      DWORD*);
++DoDragDropFn original_do_drag_drop = nullptr;
++
++std::wstring GetMappingName(DWORD browser_pid) {
++  return L"Local\\ChromePlusSuperDrag-" + std::to_wstring(browser_pid);
++}
++
++bool IsValidUrl(std::wstring_view url) {
++  if (url.empty() || url.size() >= kMaxUrlChars) {
++    return false;
++  }
++  return !url.starts_with(L"javascript:");
++}
++
++std::optional<std::string> GetHGlobalText(IDataObject* data_object,
++                                          CLIPFORMAT format) {
++  if (!data_object) {
++    return std::nullopt;
++  }
++
++  FORMATETC format_etc = {format, nullptr, DVASPECT_CONTENT, -1,
++                           TYMED_HGLOBAL};
++  STGMEDIUM medium = {};
++  if (FAILED(data_object->GetData(&format_etc, &medium)) ||
++      medium.tymed != TYMED_HGLOBAL || !medium.hGlobal) {
++    return std::nullopt;
++  }
++
++  const void* locked = GlobalLock(medium.hGlobal);
++  const SIZE_T bytes = GlobalSize(medium.hGlobal);
++  std::optional<std::string> text;
++  if (locked && bytes > 0) {
++    const auto* first = static_cast<const char*>(locked);
++    const auto* end = first + bytes;
++    if (const auto* terminator = std::find(first, end, '\0');
++        terminator != end) {
++      text.emplace(first, terminator);
++    }
++  }
++  if (locked) {
++    GlobalUnlock(medium.hGlobal);
++  }
++  ReleaseStgMedium(&medium);
++  return text;
++}
++
++std::optional<std::wstring> GetHGlobalWideText(IDataObject* data_object,
++                                                CLIPFORMAT format) {
++  if (!data_object) {
++    return std::nullopt;
++  }
++
++  FORMATETC format_etc = {format, nullptr, DVASPECT_CONTENT, -1,
++                           TYMED_HGLOBAL};
++  STGMEDIUM medium = {};
++  if (FAILED(data_object->GetData(&format_etc, &medium)) ||
++      medium.tymed != TYMED_HGLOBAL || !medium.hGlobal) {
++    return std::nullopt;
++  }
++
++  const auto* locked = static_cast<const wchar_t*>(GlobalLock(medium.hGlobal));
++  const SIZE_T bytes = GlobalSize(medium.hGlobal);
++  std::optional<std::wstring> text;
++  if (locked && bytes >= sizeof(wchar_t)) {
++    const size_t capacity = bytes / sizeof(wchar_t);
++    const auto* end = locked + capacity;
++    if (const auto* terminator = std::find(locked, end, L'\0');
++        terminator != end) {
++      text.emplace(locked, terminator);
++    }
++  }
++  if (locked) {
++    GlobalUnlock(medium.hGlobal);
++  }
++  ReleaseStgMedium(&medium);
++  return text;
++}
++
++std::optional<std::string_view> GetHtmlFragment(std::string_view html) {
++  const size_t header_end = html.find("\r\n\r\n");
++  if (header_end == std::string_view::npos) {
++    return std::nullopt;
++  }
++
++  const auto read_offset = [&](std::string_view name) -> std::optional<size_t> {
++    const size_t name_pos = html.find(name);
++    if (name_pos == std::string_view::npos || name_pos >= header_end) {
++      return std::nullopt;
++    }
++    size_t value = 0;
++    bool has_digit = false;
++    for (size_t i = name_pos + name.size(); i < header_end; ++i) {
++      const unsigned char ch = static_cast<unsigned char>(html[i]);
++      if (ch == '\r' || ch == '\n') {
++        break;
++      }
++      if (!std::isdigit(ch)) {
++        continue;
++      }
++      has_digit = true;
++      value = value * 10 + (ch - '0');
++      if (value > html.size()) {
++        return std::nullopt;
++      }
++    }
++    return has_digit ? std::optional<size_t>(value) : std::nullopt;
++  };
++
++  const auto start = read_offset("StartFragment:");
++  const auto end = read_offset("EndFragment:");
++  if (!start || !end || *start >= *end || *end > html.size()) {
++    return std::nullopt;
++  }
++  return html.substr(*start, *end - *start);
++}
++
++bool IsAsciiEqualIgnoreCase(char left, char right) {
++  return std::tolower(static_cast<unsigned char>(left)) ==
++         std::tolower(static_cast<unsigned char>(right));
++}
++
++bool StartsWithAsciiIgnoreCase(std::string_view text, std::string_view prefix) {
++  return text.size() >= prefix.size() &&
++         std::ranges::equal(text.substr(0, prefix.size()), prefix,
++                            IsAsciiEqualIgnoreCase);
++}
++
++bool ContainsAsciiIgnoreCase(std::string_view text, std::string_view needle) {
++  if (needle.empty() || needle.size() > text.size()) {
++    return false;
++  }
++  for (size_t i = 0; i <= text.size() - needle.size(); ++i) {
++    if (StartsWithAsciiIgnoreCase(text.substr(i), needle)) {
++      return true;
++    }
++  }
++  return false;
++}
++
++// Chromium's CF_HTML fragment preserves a dragged anchor as its first element.
++// Reject image drags even when an image is wrapped by an anchor so native image
++// dragging is left entirely to Chrome.
++bool IsAnchorOnlyHtmlFragment(std::string_view fragment) {
++  size_t pos = 0;
++  while (pos < fragment.size()) {
++    const size_t tag_start = fragment.find('<', pos);
++    if (tag_start == std::string_view::npos) {
++      return false;
++    }
++    if (fragment.substr(tag_start).starts_with("<!--")) {
++      const size_t comment_end = fragment.find("-->", tag_start + 4);
++      if (comment_end == std::string_view::npos) {
++        return false;
++      }
++      pos = comment_end + 3;
++      continue;
++    }
++    const size_t name_start = tag_start + 1;
++    if (name_start >= fragment.size() || fragment[name_start] == '/') {
++      return false;
++    }
++    const size_t tag_end = fragment.find('>', name_start);
++    if (tag_end == std::string_view::npos) {
++      return false;
++    }
++    const std::string_view tag = fragment.substr(name_start, tag_end - name_start);
++    if (!StartsWithAsciiIgnoreCase(tag, "a") ||
++        (tag.size() > 1 && !std::isspace(static_cast<unsigned char>(tag[1])) &&
++         tag[1] != '/')) {
++      return false;
++    }
++    if (!ContainsAsciiIgnoreCase(tag, "href")) {
++      return false;
++    }
++    return !ContainsAsciiIgnoreCase(fragment.substr(tag_end + 1), "<img");
++  }
++  return false;
++}
++
++std::optional<std::wstring> GetDraggedAnchorUrl(IDataObject* data_object) {
++  const CLIPFORMAT html_format = RegisterClipboardFormatW(L"HTML Format");
++  const auto html = GetHGlobalText(data_object, html_format);
++  if (!html) {
++    return std::nullopt;
++  }
++  const auto fragment = GetHtmlFragment(*html);
++  if (!fragment || !IsAnchorOnlyHtmlFragment(*fragment)) {
++    return std::nullopt;
++  }
++
++  const CLIPFORMAT url_format = RegisterClipboardFormatW(CFSTR_INETURLW);
++  const auto url = GetHGlobalWideText(data_object, url_format);
++  return url && IsValidUrl(*url) ? url : std::nullopt;
++}
++
++void PublishDraggedUrl(std::wstring_view url) {
++  HWND root = GetForegroundWindow();
++  root = root ? GetAncestor(root, GA_ROOT) : nullptr;
++  DWORD browser_pid = 0;
++  if (!root || !IsChromeWindow(root) ||
++      !GetWindowThreadProcessId(root, &browser_pid)) {
++    return;
++  }
++
++  HANDLE mapping = OpenFileMappingW(FILE_MAP_WRITE, FALSE,
++                                    GetMappingName(browser_pid).c_str());
++  if (!mapping) {
++    return;
++  }
++  auto* record = static_cast<SharedDragRecord*>(
++      MapViewOfFile(mapping, FILE_MAP_WRITE, 0, 0, sizeof(SharedDragRecord)));
++  if (!record) {
++    CloseHandle(mapping);
++    return;
++  }
++
++  InterlockedExchange(&record->ready, 0);
++  record->magic = kSharedMagic;
++  record->captured_ticks = GetTickCount64();
++  std::copy(url.begin(), url.end(), record->url);
++  record->url[url.size()] = L'\0';
++  MemoryBarrier();
++  InterlockedExchange(&record->ready, 1);
++  UnmapViewOfFile(record);
++  CloseHandle(mapping);
++}
++
++HRESULT WINAPI DetouredDoDragDrop(IDataObject* data_object,
++                                  IDropSource* drop_source,
++                                  DWORD ok_effects,
++                                  DWORD* effect) {
++  if (config.IsSuperDragOpenLink()) {
++    if (const auto url = GetDraggedAnchorUrl(data_object)) {
++      PublishDraggedUrl(*url);
++    }
++  }
++  return original_do_drag_drop(data_object, drop_source, ok_effects, effect);
++}
++
++void ClearRecord() {
++  if (drag_record) {
++    InterlockedExchange(&drag_record->ready, 0);
++  }
++}
++
++std::optional<std::wstring> TakeRecentRecord() {
++  if (!drag_record || InterlockedCompareExchange(&drag_record->ready, 0, 0) == 0) {
++    return std::nullopt;
++  }
++  MemoryBarrier();
++  if (drag_record->magic != kSharedMagic ||
++      GetTickCount64() - drag_record->captured_ticks > kRecordTimeoutMs) {
++    ClearRecord();
++    return std::nullopt;
++  }
++  const std::wstring url(drag_record->url);
++  ClearRecord();
++  return IsValidUrl(url) ? std::optional<std::wstring>(url) : std::nullopt;
++}
++
++bool HasMovedFarEnough(POINT up_point) {
++  if (lbutton_down_point.x < 0 || lbutton_down_point.y < 0) {
++    return false;
++  }
++  const LONG dx = std::abs(up_point.x - lbutton_down_point.x);
++  const LONG dy = std::abs(up_point.y - lbutton_down_point.y);
++  const LONG distance = config.GetSuperDragDistance();
++  return dx > distance || dy > distance;
++}
++
++bool SendModifiedClickAt(POINT point, bool background) {
++  POINT cursor;
++  if (!GetCursorPos(&cursor) || !SetCursorPos(point.x, point.y)) {
++    return false;
++  }
++
++  const auto keyboard_input = [](WORD key, DWORD flags) {
++    INPUT input = {};
++    input.type = INPUT_KEYBOARD;
++    input.ki.wVk = key;
++    input.ki.dwFlags = flags;
++    input.ki.dwExtraInfo = GetMagicCode();
++    return input;
++  };
++  const auto mouse_input = [](DWORD flags) {
++    INPUT input = {};
++    input.type = INPUT_MOUSE;
++    input.mi.dwFlags = flags;
++    input.mi.dwExtraInfo = GetMagicCode();
++    return input;
++  };
++  const std::array<INPUT, 6> inputs = {
++      keyboard_input(VK_CONTROL, KEYEVENTF_EXTENDEDKEY),
++      keyboard_input(VK_SHIFT, KEYEVENTF_EXTENDEDKEY),
++      mouse_input(MOUSEEVENTF_LEFTDOWN),
++      mouse_input(MOUSEEVENTF_LEFTUP),
++      keyboard_input(VK_SHIFT, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP),
++      keyboard_input(VK_CONTROL, KEYEVENTF_EXTENDEDKEY | KEYEVENTF_KEYUP),
++  };
++  // Ctrl-click is Chromium's native background-tab disposition; adding Shift
++  // makes Chromium activate the new tab. Keep the event in Chrome's own link
++  // activation path rather than depending on private browser ABI addresses.
++  const UINT count = background ? 4 : static_cast<UINT>(inputs.size());
++  std::array<INPUT, 4> background_inputs = {inputs[0], inputs[2], inputs[3],
++                                             inputs[5]};
++  const UINT sent = background
++                        ? SendInput(count, background_inputs.data(), sizeof(INPUT))
++                        : SendInput(count, inputs.data(), sizeof(INPUT));
++  SetCursorPos(cursor.x, cursor.y);
++  return sent == count;
++}
++
++bool SuperDragMouseHandler(WPARAM w_param, LPARAM l_param) {
++  if (!config.IsSuperDragOpenLink()) {
++    return false;
++  }
++  const auto* mouse = reinterpret_cast<const MOUSEHOOKSTRUCT*>(l_param);
++  if (w_param == WM_LBUTTONDOWN) {
++    lbutton_down_point = mouse->pt;
++    ClearRecord();
++    return false;
++  }
++  if (w_param != WM_LBUTTONUP || !HasMovedFarEnough(mouse->pt)) {
++    return false;
++  }
++  const auto url = TakeRecentRecord();
++  if (!url) {
++    return false;
++  }
++  return SendModifiedClickAt(lbutton_down_point, config.IsSuperDragBackground());
++}
++
++}  // namespace
++
++void InitializeSuperDragBrowser() {
++  if (!config.IsSuperDragOpenLink()) {
++    return;
++  }
++  drag_mapping = CreateFileMappingW(INVALID_HANDLE_VALUE, nullptr, PAGE_READWRITE,
++                                    0, sizeof(SharedDragRecord),
++                                    GetMappingName(GetCurrentProcessId()).c_str());
++  if (!drag_mapping) {
++    DebugLog(L"super drag: CreateFileMapping failed: {}", GetLastError());
++    return;
++  }
++  drag_record = static_cast<SharedDragRecord*>(
++      MapViewOfFile(drag_mapping, FILE_MAP_ALL_ACCESS, 0, 0,
++                    sizeof(SharedDragRecord)));
++  if (!drag_record) {
++    DebugLog(L"super drag: MapViewOfFile failed: {}", GetLastError());
++    CloseHandle(drag_mapping);
++    drag_mapping = nullptr;
++    return;
++  }
++  ZeroMemory(drag_record, sizeof(*drag_record));
++  RegisterMouseHandler(SuperDragMouseHandler, HandlerPriority::kHigh);
++}
++
++void InitializeSuperDragRenderer() {
++  if (!config.IsSuperDragOpenLink() || original_do_drag_drop) {
++    return;
++  }
++  const HMODULE ole32 = GetModuleHandleW(L"ole32.dll");
++  const auto do_drag_drop = ole32 ? reinterpret_cast<DoDragDropFn>(
++                                    GetProcAddress(ole32, "DoDragDrop"))
++                              : nullptr;
++  if (!do_drag_drop) {
++    DebugLog(L"super drag: DoDragDrop was not found");
++    return;
++  }
++
++  original_do_drag_drop = do_drag_drop;
++  DetourTransactionBegin();
++  DetourUpdateThread(GetCurrentThread());
++  DetourAttach(reinterpret_cast<PVOID*>(&original_do_drag_drop),
++               DetouredDoDragDrop);
++  const LONG status = DetourTransactionCommit();
++  if (status != NO_ERROR) {
++    DebugLog(L"super drag: DetourAttach(DoDragDrop) failed: {}", status);
++    original_do_drag_drop = nullptr;
++  }
++}
+diff --git a/src/superdrag.h b/src/superdrag.h
+new file mode 100644
+index 0000000..060411f
+--- /dev/null
++++ b/src/superdrag.h
+@@ -0,0 +1,10 @@
++#ifndef CHROME_PLUS_SRC_SUPERDRAG_H_
++#define CHROME_PLUS_SRC_SUPERDRAG_H_
++
++// Called in the browser process before InstallInputHooks().
++void InitializeSuperDragBrowser();
++
++// Called only in renderer processes. Captures Chromium's OLE link drag data.
++void InitializeSuperDragRenderer();
++
++#endif  // CHROME_PLUS_SRC_SUPERDRAG_H_
+diff --git a/src/tabbookmark.cc b/src/tabbookmark.cc
+index a79508a..23bed24 100644
+--- a/src/tabbookmark.cc
++++ b/src/tabbookmark.cc
+@@ -2,7 +2,14 @@
+ 
+ #include <windows.h>
+ 
++#include <ole2.h>
++#include <wrl/client.h>
++
++#include <array>
++#include <cstring>
+ #include <optional>
++#include <string>
++#include <vector>
+ 
+ #include "config.h"
+ #include "inputhook.h"
+@@ -11,9 +18,34 @@
+ 
+ namespace {
+ 
++using Microsoft::WRL::ComPtr;
++
+ constexpr UINT kDefaultDpi = 96;
+ POINT lbutton_down_point = {-1, -1};
+ 
++constexpr UINT_PTR kBookmarkBatchTimerId = 0x626D4F70;  // 'bmOp'
++
++enum class BookmarkBatchPhase {
++  kClickFolderAfterContext,
++  kWaitForMenu,
++  kOpenNextUrl,
++  kRestoreClipboard,
++};
++
++struct BookmarkBatchState {
++  HWND root = nullptr;
++  POINT folder_point = {};
++  BookmarkBatchPhase phase = BookmarkBatchPhase::kWaitForMenu;
++  std::vector<std::wstring> urls;
++  size_t next_url = 0;
++  ComPtr<IDataObject> clipboard_before;
++};
++
++std::optional<BookmarkBatchState> bookmark_batch;
++std::optional<POINT> context_bookmark_folder_point;
++HWND context_bookmark_root = nullptr;
++ULONGLONG context_bookmark_ticks = 0;
++
+ constexpr UINT_PTR kHoverTabTimerId = 0x68764254;  // 'hvBT'
+ // Non-null while a dwell timer is armed on that top-level window.
+ HWND hover_tab_root = nullptr;
+@@ -84,6 +116,180 @@ UINT GetWindowDpiSafe(HWND hwnd) {
+   return dpi ? dpi : kDefaultDpi;
+ }
+ 
++bool SetClipboardText(std::wstring_view text) {
++  if (!OpenClipboard(nullptr)) {
++    return false;
++  }
++  const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
++  HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
++  if (!memory) {
++    CloseClipboard();
++    return false;
++  }
++  void* locked = GlobalLock(memory);
++  if (!locked) {
++    GlobalFree(memory);
++    CloseClipboard();
++    return false;
++  }
++  std::memcpy(locked, text.data(), text.size() * sizeof(wchar_t));
++  static_cast<wchar_t*>(locked)[text.size()] = L'\0';
++  GlobalUnlock(memory);
++  EmptyClipboard();
++  if (!SetClipboardData(CF_UNICODETEXT, memory)) {
++    GlobalFree(memory);
++    CloseClipboard();
++    return false;
++  }
++  CloseClipboard();
++  return true;
++}
++
++bool SendLeftClickAt(POINT point) {
++  POINT cursor;
++  if (!GetCursorPos(&cursor) || !SetCursorPos(point.x, point.y)) {
++    return false;
++  }
++  const auto mouse_input = [](DWORD flags) {
++    INPUT input = {};
++    input.type = INPUT_MOUSE;
++    input.mi.dwFlags = flags;
++    input.mi.dwExtraInfo = GetMagicCode();
++    return input;
++  };
++  const std::array<INPUT, 2> inputs = {mouse_input(MOUSEEVENTF_LEFTDOWN),
++                                       mouse_input(MOUSEEVENTF_LEFTUP)};
++  const bool sent =
++      SendInput(static_cast<UINT>(inputs.size()), inputs.data(), sizeof(INPUT)) ==
++      inputs.size();
++  SetCursorPos(cursor.x, cursor.y);
++  return sent;
++}
++
++void ArmBookmarkBatchTimer(HWND root, UINT delay);
++
++void CALLBACK BookmarkBatchTimerProc(HWND root, UINT, UINT_PTR event_id, DWORD) {
++  KillTimer(root, event_id);
++  if (!bookmark_batch || bookmark_batch->root != root || !IsWindow(root)) {
++    bookmark_batch.reset();
++    return;
++  }
++
++  auto& batch = *bookmark_batch;
++  switch (batch.phase) {
++    case BookmarkBatchPhase::kClickFolderAfterContext:
++      SendKey(VK_ESCAPE);
++      if (!SendLeftClickAt(batch.folder_point)) {
++        bookmark_batch.reset();
++        return;
++      }
++      batch.phase = BookmarkBatchPhase::kWaitForMenu;
++      ArmBookmarkBatchTimer(root, 75);
++      return;
++    case BookmarkBatchPhase::kWaitForMenu:
++      batch.urls = GetOpenBookmarkMenuUrls(root);
++      if (batch.urls.empty() ||
++          FAILED(OleGetClipboard(batch.clipboard_before.ReleaseAndGetAddressOf()))) {
++        bookmark_batch.reset();
++        return;
++      }
++      // Close the folder menu before focus moves through the omnibox. The
++      // following opens remain in Chrome's normal tab-creation path.
++      SendKey(VK_ESCAPE);
++      batch.phase = BookmarkBatchPhase::kOpenNextUrl;
++      ArmBookmarkBatchTimer(root, 25);
++      return;
++    case BookmarkBatchPhase::kOpenNextUrl:
++      if (batch.next_url == batch.urls.size()) {
++        batch.phase = BookmarkBatchPhase::kRestoreClipboard;
++        ArmBookmarkBatchTimer(root, 75);
++        return;
++      }
++      if (!SetClipboardText(batch.urls[batch.next_url])) {
++        bookmark_batch.reset();
++        return;
++      }
++      SendKey(VK_CONTROL, 'L');
++      SendKey(VK_CONTROL, 'V');
++      const bool foreground =
++          batch.next_url == 0 ? config.IsBookmarkOpenFirstForeground()
++                              : !config.IsBookmarkOpenRestBackground();
++      if (foreground) {
++        SendKey(VK_MENU, VK_RETURN);
++      } else {
++        SendKey(VK_SHIFT, VK_MENU, VK_RETURN);
++      }
++      ++batch.next_url;
++      ArmBookmarkBatchTimer(root, 75);
++      return;
++    case BookmarkBatchPhase::kRestoreClipboard:
++      OleSetClipboard(batch.clipboard_before.Get());
++      bookmark_batch.reset();
++      return;
++  }
++}
++
++void ArmBookmarkBatchTimer(HWND root, UINT delay) {
++  if (!SetTimer(root, kBookmarkBatchTimerId, delay, BookmarkBatchTimerProc)) {
++    bookmark_batch.reset();
++  }
++}
++
++void StartBookmarkFolderBatch(HWND root, POINT point, bool from_context_menu) {
++  if (!config.IsBookmarkBatchOpenEnabled() || !root || !IsWindow(root)) {
++    return;
++  }
++  bookmark_batch = BookmarkBatchState{
++      .root = root,
++      .folder_point = point,
++      .phase = from_context_menu
++                   ? BookmarkBatchPhase::kClickFolderAfterContext
++                   : BookmarkBatchPhase::kWaitForMenu,
++  };
++  ArmBookmarkBatchTimer(root, from_context_menu ? 1 : 75);
++}
++
++// Folder menus themselves remain Chrome UI. We wait until Chrome has built
++// the menu, take its displayed URL list, and then apply the requested tab
++// disposition consistently to that list.
++bool HandleBookmarkBatchMouse(WPARAM w_param,
++                              const MOUSEHOOKSTRUCT* pmouse) {
++  if (!config.IsBookmarkBatchOpenEnabled()) {
++    return false;
++  }
++  if (w_param == WM_RBUTTONUP) {
++    if (IsOnBookmarkFolder(pmouse->pt)) {
++      const HWND root = GetAncestor(pmouse->hwnd, GA_ROOT);
++      if (root) {
++        context_bookmark_folder_point = pmouse->pt;
++        context_bookmark_root = root;
++        context_bookmark_ticks = GetTickCount64();
++      }
++    }
++    return false;
++  }
++  if (w_param != WM_LBUTTONUP) {
++    return false;
++  }
++
++  if (context_bookmark_folder_point && context_bookmark_root &&
++      GetTickCount64() - context_bookmark_ticks <= 10000 &&
++      IsBookmarkOpenAllCommand(pmouse->pt)) {
++    StartBookmarkFolderBatch(context_bookmark_root,
++                             *context_bookmark_folder_point,
++                             /*from_context_menu=*/true);
++    context_bookmark_folder_point.reset();
++    context_bookmark_root = nullptr;
++    return true;
++  }
++
++  if (IsOnBookmarkFolder(pmouse->pt)) {
++    const HWND root = GetAncestor(pmouse->hwnd, GA_ROOT);
++    StartBookmarkFolderBatch(root, pmouse->pt, /*from_context_menu=*/false);
++  }
++  return false;
++}
++
+ void CancelHoverTabTimer() {
+   if (!hover_tab_root) {
+     return;
+@@ -427,6 +633,9 @@ bool TabBookmarkMouseHandler(WPARAM wParam, LPARAM lParam) {
+       if (closing_tab_by_dblclk) {
+         return true;
+       }
++      if (HandleBookmarkBatchMouse(wParam, pmouse)) {
++        return true;
++      }
+       if (HandleDrag(pmouse)) {
+         return false;
+       } else if (HandleBookmark(pmouse)) {
+@@ -446,6 +655,7 @@ bool TabBookmarkMouseHandler(WPARAM wParam, LPARAM lParam) {
+       if (closing_tab_by_right) {
+         return true;
+       }
++      HandleBookmarkBatchMouse(wParam, pmouse);
+       if (wheel_tab_ing_with_rbutton) {
+         // Swallow the first RBUTTONUP that follows a wheel-based tab switch to
+         // suppress Chrome's context menu; the RBUTTONUP arrives after
+diff --git a/src/uia.cc b/src/uia.cc
+index 755836e..6a0bb74 100644
+--- a/src/uia.cc
++++ b/src/uia.cc
+@@ -350,6 +350,10 @@ bool IsValidBookmark(const ComPtr<IUIAutomationElement>& element) {
+          (view.contains(L':') || view.contains(L'.'));
+ }
+ 
++bool IsBookmarkItem(const ComPtr<IUIAutomationElement>& element) {
++  return HasAnyClassName(element, {L"BookmarkButton", L"MenuItemView"});
++}
++
+ // Walker-based traversal has a blind spot on Chrome 152+'s unified tab strip:
+ // Chromium materializes the accessibility subtree below `TabStripView`
+ // lazily, and until a scoped FindFirst/FindAll has touched it, walker
+@@ -984,7 +988,8 @@ std::optional<std::wstring> GetNewTabButtonName(
+ ComPtr<IUIAutomationElement> FindBookmarkInAnchor(
+     const ComPtr<IUIAutomationElement>& anchor,
+     const ComPtr<IUIAutomationCondition>& item_condition,
+-    POINT pt) {
++    POINT pt,
++    bool require_url) {
+   ComPtr<IUIAutomationElementArray> elements;
+   if (FAILED(anchor->FindAll(TreeScope_Subtree, item_condition.Get(),
+                              elements.ReleaseAndGetAddressOf())) ||
+@@ -1005,7 +1010,8 @@ ComPtr<IUIAutomationElement> FindBookmarkInAnchor(
+     if (FAILED(element->get_CurrentBoundingRectangle(&rect))) {
+       continue;
+     }
+-    if (PtInRect(&rect, pt) && IsValidBookmark(element)) {
++    if (PtInRect(&rect, pt) && IsBookmarkItem(element) &&
++        (!require_url || IsValidBookmark(element))) {
+       return element;
+     }
+   }
+@@ -1043,7 +1049,10 @@ bool WindowHostsWebContent(HWND window) {
+ // Every scan stays out of web content: the anchored subtrees have no content
+ // branch, and the discovery walk is the chrome-only BFS.
+ ComPtr<IUIAutomationElement>
+-FindBookmarkCoveringPoint(const UiaSession& session, HWND window, POINT pt) {
++FindBookmarkCoveringPoint(const UiaSession& session,
++                          HWND window,
++                          POINT pt,
++                          bool require_url) {
+   const auto window_element = GetElementFromWindow(session, window);
+   if (!window_element) {
+     return nullptr;
+@@ -1063,7 +1072,8 @@ FindBookmarkCoveringPoint(const UiaSession& session, HWND window, POINT pt) {
+           session.control_view_walker.Get(), window_element,
+           {L"TopContainerView"}, /*max_visited=*/256)) {
+     return FindBookmarkInAnchor(top_container,
+-                                session.class_conditions.bookmark_button, pt);
++                                session.class_conditions.bookmark_button, pt,
++                                require_url);
+   }
+ 
+   // `FindBarHost` is a separate widget positioned from
+@@ -1077,7 +1087,7 @@ FindBookmarkCoveringPoint(const UiaSession& session, HWND window, POINT pt) {
+     ComPtr<IUIAutomationElement> pointed;
+     if (SUCCEEDED(session.automation->ElementFromPoint(
+             pt, pointed.ReleaseAndGetAddressOf())) &&
+-        IsValidBookmark(pointed)) {
++        IsBookmarkItem(pointed) && (!require_url || IsValidBookmark(pointed))) {
+       return pointed;
+     }
+   }
+@@ -1092,7 +1102,42 @@ FindBookmarkCoveringPoint(const UiaSession& session, HWND window, POINT pt) {
+     return nullptr;
+   }
+   return FindBookmarkInAnchor(window_element,
+-                              session.class_conditions.menu_item_view, pt);
++                              session.class_conditions.menu_item_view, pt,
++                              require_url);
++}
++
++std::vector<std::wstring> GetBookmarkUrlsFromWindow(const UiaSession& session,
++                                                     HWND window) {
++  std::vector<std::wstring> urls;
++  const auto root = GetElementFromWindow(session, window);
++  if (!root || WindowHostsWebContent(window)) {
++    return urls;
++  }
++
++  ComPtr<IUIAutomationElementArray> elements;
++  if (FAILED(root->FindAll(TreeScope_Subtree,
++                            session.class_conditions.menu_item_view.Get(),
++                            elements.ReleaseAndGetAddressOf())) ||
++      !elements) {
++    return urls;
++  }
++
++  int length = 0;
++  if (FAILED(elements->get_Length(&length))) {
++    return urls;
++  }
++  for (int i = 0; i < length; ++i) {
++    ComPtr<IUIAutomationElement> element;
++    if (FAILED(elements->GetElement(i, element.ReleaseAndGetAddressOf())) ||
++        !IsValidBookmark(element)) {
++      continue;
++    }
++    const auto url = GetStringProperty(element, UIA_FullDescriptionPropertyId);
++    if (url && !std::ranges::contains(urls, *url)) {
++      urls.emplace_back(*url);
++    }
++  }
++  return urls;
+ }
+ 
+ }  // namespace
+@@ -1257,7 +1302,89 @@ bool IsOnBookmark(POINT pt) {
+     return false;
+   }
+ 
+-  return FindBookmarkCoveringPoint(*session, root, pt) != nullptr;
++  return FindBookmarkCoveringPoint(*session, root, pt,
++                                   /*require_url=*/true) != nullptr;
++}
++
++bool IsOnBookmarkFolder(POINT pt) {
++  const UiaSession* session = GetUiaSession();
++  if (!session) {
++    return false;
++  }
++  const HWND hwnd = WindowFromPoint(pt);
++  const HWND root = hwnd ? GetAncestor(hwnd, GA_ROOT) : nullptr;
++  if (!root || !IsChromeWindow(root)) {
++    return false;
++  }
++  const auto item = FindBookmarkCoveringPoint(*session, root, pt,
++                                               /*require_url=*/false);
++  return item && !IsValidBookmark(item);
++}
++
++bool IsBookmarkOpenAllCommand(POINT pt) {
++  const UiaSession* session = GetUiaSession();
++  if (!session) {
++    return false;
++  }
++  const HWND point_window = WindowFromPoint(pt);
++  const HWND root = point_window ? GetAncestor(point_window, GA_ROOT) : nullptr;
++  if (!root || !IsChromeWindow(root) || WindowHostsWebContent(root)) {
++    return false;
++  }
++
++  ComPtr<IUIAutomationElement> element;
++  if (FAILED(session->automation->ElementFromPoint(
++          pt, element.ReleaseAndGetAddressOf()))) {
++    return false;
++  }
++  constexpr int kMaxAncestorDepth = 8;
++  for (int depth = 0; element && depth < kMaxAncestorDepth; ++depth) {
++    if (HasClassName(element, L"MenuItemView")) {
++      const auto name = GetStringProperty(element, UIA_NamePropertyId);
++      // The context-menu command is localized by Chromium. These are the two
++      // bundled UI languages documented by Chrome++'s distribution; unknown
++      // names fall through to Chrome's untouched command path.
++      return name && (*name == L"Open all" || *name == L"打开全部");
++    }
++    ComPtr<IUIAutomationElement> parent;
++    if (FAILED(session->control_view_walker->GetParentElement(
++            element.Get(), parent.ReleaseAndGetAddressOf()))) {
++      break;
++    }
++    element = std::move(parent);
++  }
++  return false;
++}
++
++std::vector<std::wstring> GetOpenBookmarkMenuUrls(HWND owner) {
++  UiaSession* session = GetUiaSession();
++  if (!session || !owner) {
++    return {};
++  }
++
++  struct SearchState {
++    const UiaSession* session;
++    HWND owner;
++    std::vector<std::wstring> urls;
++  } state = {session, owner, {}};
++  EnumThreadWindows(
++      GetCurrentThreadId(),
++      [](HWND window, LPARAM param) -> BOOL {
++        auto* state = reinterpret_cast<SearchState*>(param);
++        if (window == state->owner || !IsWindowVisible(window) ||
++            !IsChromeWindow(window)) {
++          return TRUE;
++        }
++        for (const auto& url : GetBookmarkUrlsFromWindow(*state->session,
++                                                          window)) {
++          if (!std::ranges::contains(state->urls, url)) {
++            state->urls.emplace_back(url);
++          }
++        }
++        return TRUE;
++      },
++      reinterpret_cast<LPARAM>(&state));
++  return state.urls;
+ }
+ 
+ bool IsOmniboxFocused() {
+diff --git a/src/uia.h b/src/uia.h
+index a58a324..da60c83 100644
+--- a/src/uia.h
++++ b/src/uia.h
+@@ -22,6 +22,9 @@ bool SelectTab(const TabHitResult& hit_result);
+ [[nodiscard]] std::optional<int> FindTabCount(HWND hwnd);
+ [[nodiscard]] bool IsOnTabBar(POINT pt);
+ [[nodiscard]] bool IsOnBookmark(POINT pt);
++[[nodiscard]] bool IsOnBookmarkFolder(POINT pt);
++[[nodiscard]] bool IsBookmarkOpenAllCommand(POINT pt);
++[[nodiscard]] std::vector<std::wstring> GetOpenBookmarkMenuUrls(HWND owner);
+ [[nodiscard]] bool IsOmniboxFocused();
+ [[nodiscard]] bool IsOnNewTab(HWND hwnd,
+                               const std::vector<std::wstring>& extra_tab_names);
